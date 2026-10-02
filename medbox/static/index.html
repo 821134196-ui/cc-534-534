@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分药盒管理 · 养老照护</title>
+<style>
+:root{
+  --cyan:#00798C; --cyan-d:#005F73; --cyan-l:#E6F4F6; --cyan-ll:#F4FAFB;
+  --ink:#1f2d33; --muted:#66787f; --line:#d7e6e9;
+  --red:#c1121f; --red-bg:#fdecef; --red-line:#f1aeb5;
+  --amber:#9a6700; --amber-bg:#fff6d9; --green:#1b7a43; --green-bg:#e7f6ee;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  background:var(--cyan-ll);color:var(--ink);font-size:15px}
+button{font-family:inherit;cursor:pointer}
+header{background:#fff;border-bottom:3px solid var(--cyan);padding:10px 18px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:20}
+header h1{font-size:18px;margin:0;color:var(--cyan-d);white-space:nowrap}
+.badge{background:var(--cyan-l);color:var(--cyan-d);border:1px solid var(--line);
+  border-radius:999px;padding:2px 10px;font-size:13px}
+.tabs{display:flex;gap:6px;margin-left:auto}
+.tabs button{border:1px solid var(--line);background:#fff;border-radius:999px;
+  padding:7px 16px;font-size:15px;color:var(--muted)}
+.tabs button.active{background:var(--cyan);color:#fff;border-color:var(--cyan);font-weight:600}
+.wrap{max-width:1180px;margin:16px auto;padding:0 16px 60px}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;margin-bottom:14px}
+.card h2{font-size:16px;margin:0 0 10px;color:var(--cyan-d)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+select,input,textarea{border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  font-size:15px;font-family:inherit;background:#fff;color:var(--ink)}
+textarea{width:100%;min-height:52px}
+.btn{border:none;border-radius:9px;padding:9px 16px;font-size:15px;font-weight:600;
+  background:var(--cyan);color:#fff}
+.btn.sec{background:#fff;color:var(--cyan-d);border:1px solid var(--cyan)}
+.btn.ghost{background:#f2f6f7;color:var(--muted);border:1px solid var(--line)}
+.btn.danger{background:var(--red)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.muted{color:var(--muted);font-size:13px}
+.toast{position:fixed;left:50%;top:62px;transform:translateX(-50%);z-index:50;
+  padding:12px 20px;border-radius:10px;font-weight:600;display:none;max-width:90vw;
+  box-shadow:0 8px 30px rgba(0,0,0,.18);line-height:1.5}
+.toast.err{background:var(--red-bg);color:var(--red);border:2px solid var(--red-line)}
+.toast.ok{background:var(--green-bg);color:var(--green);border:1px solid #a8d8bf}
+
+/* 高风险：文字 + 红色双重提示 */
+.flag-high{background:var(--red-bg);border:1.5px solid var(--red-line);color:var(--red);
+  border-radius:8px;padding:8px 10px;font-weight:700}
+.flag-high::before{content:"⛔ 阻断 · ";font-weight:800}
+.flag-warn{background:var(--amber-bg);border:1px solid #e8d48b;color:var(--amber);
+  border-radius:8px;padding:6px 10px;font-size:13px}
+.flag-warn::before{content:"⚠ 待复核 · "}
+.tag{display:inline-block;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:600}
+.t-packed{background:#eef2f3;color:#5a6c73}
+.t-signed{background:var(--cyan-l);color:var(--cyan-d)}
+.t-sealed{background:#e3eff7;color:#1d5c86}
+.t-handed_over{background:#e9f1ff;color:#1d4fa3}
+.t-completed{background:var(--green-bg);color:var(--green)}
+.t-void{background:var(--red-bg);color:var(--red);text-decoration:line-through}
+.t-taken{background:var(--green-bg);color:var(--green)}
+.t-refused{background:var(--red-bg);color:var(--red)}
+.t-deferred{background:var(--amber-bg);color:var(--amber)}
+
+/* 药盒格位：餐次×床位固定 */
+.boxgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.pillbox{border:1.5px solid var(--line);border-radius:var(--radius);overflow:hidden;background:#fff}
+.pillbox.stale{border-color:var(--red);box-shadow:0 0 0 2px var(--red-bg)}
+.pb-head{background:var(--cyan-l);padding:9px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pb-head .bed{font-weight:800;font-size:17px;color:var(--cyan-d)}
+.pb-head .slot{background:var(--cyan);color:#fff;border-radius:6px;padding:1px 9px;font-size:13px}
+.pb-head .ver{margin-left:auto;font-size:12px;color:var(--muted)}
+.cell{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-top:1px dashed var(--line)}
+.cell-num{flex:none;width:30px;height:30px;border-radius:8px;background:var(--cyan-l);
+  color:var(--cyan-d);font-weight:800;display:flex;align-items:center;justify-content:center}
+.cell-body{flex:1;min-width:0}
+.cell-body .med{font-weight:700;font-size:15px}
+.cell-body .spec{color:var(--muted);font-size:13px;margin-top:1px}
+.cell-actions{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.cell-actions button{font-size:12.5px;padding:4px 9px;border-radius:6px;border:1px solid var(--line);background:#fff}
+.cell-actions .b-bad{color:var(--red);border-color:var(--red-line)}
+.state-broken,.state-misplaced{color:var(--red);font-weight:700;font-size:12.5px}
+.pb-foot{padding:9px 12px;border-top:1px solid var(--line);display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+
+/* 床旁端 */
+.bedside{background:#fff;border-radius:16px;border:2px solid var(--cyan);
+  padding:18px;margin-bottom:16px}
+.remaining{font-size:22px;font-weight:800;color:var(--cyan-d)}
+.remaining b{font-size:34px;color:var(--red)}
+.big-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
+.big{border:none;border-radius:14px;padding:22px 8px;font-size:22px;font-weight:800;color:#fff}
+.big.taken{background:var(--green)} .big.refuse{background:var(--red)}
+.big.defer{background:#c77f12}
+.big:disabled{filter:grayscale(.7);opacity:.55}
+.scanbox{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.exc{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#fff}
+.exc.open.high{border-left:5px solid var(--red);background:var(--red-bg)}
+.exc.open.warn{border-left:5px solid #d9a93b;background:var(--amber-bg)}
+.exc.closed{opacity:.62}
+.exc .meta{font-size:12.5px;color:var(--muted);margin-top:3px}
+.notif{font-size:13.5px;padding:6px 10px;border-bottom:1px dashed var(--line)}
+.notif.unread{font-weight:700}
+.notif .nkind{color:var(--red);margin-right:6px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left}
+th{background:var(--cyan-l);color:var(--cyan-d)}
+.away-pill{background:var(--red);color:#fff;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:700}
+.hidden{display:none!important}
+dialog{border:none;border-radius:14px;padding:18px;width:min(520px,94vw)}
+dialog::backdrop{background:rgba(20,50,56,.4)}
+.photo{max-width:150px;border-radius:8px;border:1px solid var(--line);margin-top:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>💊 分药盒管理系统</h1>
+  <span class="badge" id="verBadge">医嘱版本 —</span>
+  <span class="badge" id="clockBadge"></span>
+  <div class="tabs">
+    <button data-tab="station" class="active">药盒台（配药 / 药师）</button>
+    <button data-tab="bedside">床旁端（护理员）</button>
+    <button data-tab="orders">医嘱 / 住户</button>
+    <button data-tab="exceptions">异常追踪</button>
+    <button data-tab="log">通知 / 流水</button>
+  </div>
+</header>
+
+<div class="toast" id="toast"></div>
+<div class="wrap">
+  <div class="card row">
+    <strong>当前操作人：</strong>
+    <select id="actor"></select>
+    <span class="muted" id="actorRole"></span>
+    <span style="flex:1"></span>
+    <button class="btn ghost" id="btnRemind">立即跑一次提醒任务</button>
+    <button class="btn ghost" onclick="location.reload()">刷新数据</button>
+  </div>
+
+  <!-- ========== 药盒台 ========== -->
+  <section id="tab-station">
+    <div class="card">
+      <h2>按医嘱版本装盒（固定床位 × 餐次）</h2>
+      <div class="row">
+        <select id="packRes"></select>
+        <select id="packSlot">
+          <option value="breakfast">早餐</option><option value="lunch">午餐</option>
+          <option value="dinner">晚餐</option>
+        </select>
+        <input type="date" id="packDate">
+        <button class="btn" id="btnPack">配药员装盒</button>
+        <span class="muted">药名与剂量会逐格打印在盒面；旧版本药盒将被阻断并要求作废。</span>
+      </div>
+    </div>
+    <div class="boxgrid" id="stationGrid"></div>
+  </section>
+
+  <!-- ========== 床旁端 ========== -->
+  <section id="tab-bedside" class="hidden">
+    <div class="card">
+      <div class="row">
+        <h2 style="margin:0">床旁执行</h2>
+        <select id="bedBoxSel" style="margin-left:auto"></select>
+      </div>
+      <div id="bedsideArea"></div>
+    </div>
+  </section>
+
+  <!-- ========== 医嘱 / 住户 ========== -->
+  <section id="tab-orders" class="hidden">
+    <div class="card">
+      <h2>临时停用医嘱（仅医生；生成新版本，旧版本即刻失效）</h2>
+      <div id="orderList"></div>
+      <div class="row" style="margin-top:10px">
+        <input id="stopReason" placeholder="停用原因（必填，如：牙龈出血暂停阿司匹林）" style="flex:1;min-width:260px">
+        <button class="btn danger" id="btnStop">医生停用所选医嘱（生成新版本）</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>新开立医嘱</h2>
+      <div class="row">
+        <select id="newRes"></select>
+        <input id="newMed" placeholder="药名" style="width:160px">
+        <input id="newSpec" placeholder="规格，如 25mg" style="width:120px">
+        <input id="newDose" placeholder="剂量，如 1片 口服" style="width:140px">
+        <select id="newSlot"><option value="breakfast">早餐</option>
+          <option value="lunch">午餐</option><option value="dinner">晚餐</option></select>
+        <button class="btn sec" id="btnNewOrder">医生新增</button>
+        <span class="muted">新增需在新版本内：系统自动生成下一版本。</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>住户与外出状态</h2>
+      <div id="residentList"></div>
+    </div>
+  </section>
+
+  <!-- ========== 异常追踪 ========== -->
+  <section id="tab-exceptions" class="hidden">
+    <div class="card"><h2>异常追踪（复核闭环）</h2><div id="excList"></div></div>
+  </section>
+
+  <!-- ========== 通知 / 流水 ========== -->
+  <section id="tab-log" class="hidden">
+    <div class="card"><h2>进程内提醒</h2><div id="notifList"></div></div>
+    <div class="card"><h2>执行 / 阻断流水（含重复给药尝试）</h2>
+      <table><thead><tr><th>时间</th><th>护理员</th><th>动作</th><th>详情</th></tr></thead>
+      <tbody id="eventList"></tbody></table></div>
+  </section>
+</div>
+
+<dialog id="dlg">
+  <h3 id="dlgTitle" style="margin-top:0"></h3>
+  <div id="dlgBody"></div>
+  <div class="row" style="margin-top:14px;justify-content:flex-end">
+    <button class="btn ghost" onclick="dlg.close()">取消</button>
+    <button class="btn" id="dlgOk">确认</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
