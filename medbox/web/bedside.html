@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>床旁执行端</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>🛏 床旁执行端</h1>
+  <nav>
+    <a href="/">总览</a>
+    <a href="/static/pharmacy.html">配药 / 双签端</a>
+    <a href="/static/bedside.html" class="active">床旁执行端</a>
+  </nav>
+  <div class="spacer"></div>
+  <div id="who"></div>
+</header>
+<main>
+  <div class="card">
+    <div class="toolbar">
+      <strong>执行护理员：</strong><span id="selNurse"></span>
+      <strong>第二确认人：</strong><span id="selWitness"></span>
+      <strong>床位：</strong><span id="selBed"></span>
+      <div class="banner-count">剩余未执行：<span id="remain">–</span> 项</div>
+    </div>
+    <div class="small muted">同一服药格被两人同时确认时，系统只保留一次有效签收；重复点击签收将被阻断。</div>
+  </div>
+  <div id="list"></div>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+async function render() {
+  const s = await api("state");
+  window.__STATE = s;
+  const nurses = s.staff.filter(x => x.role === "NURSE" && x.code !== "SYSTEM");
+  if (!document.getElementById("selNurse").querySelector("select")) {
+    document.getElementById("selNurse").innerHTML =
+      `<select id="nurse">${nurses.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>`;
+    document.getElementById("selWitness").innerHTML =
+      `<select id="witness"><option value="">无</option>${nurses.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>`;
+    document.getElementById("selBed").innerHTML =
+      `<select id="bed" onchange="render()"><option value="">全部床位</option>` +
+      s.residents.map(r=>`<option value="${esc(r.bed_no)}">${esc(r.bed_no)} ${esc(r.name)}</option>`).join("") +
+      `</select>`;
+    document.getElementById("nurse").onchange = render;
+    document.getElementById("witness").onchange = render;
+  }
+  const bed = document.getElementById("bed").value;
+  const pending = await api("pending" + (bed ? "?bed=" + encodeURIComponent(bed) : ""));
+  document.getElementById("remain").textContent =
+    pending.filter(c => c.status === "SCANNED_OK").length;
+  document.getElementById("who").innerHTML = "";
+
+  const groups = {};
+  for (const c of pending) (groups[c.slot] ||= []).push(c);
+  document.getElementById("list").innerHTML = s.slots.map(slot => {
+    const cs = groups[slot] || [];
+    if (!cs.length) return "";
+    return `<div class="card"><h2>${slot}</h2>` + cs.map(c => `
+      <div class="bedside-item" style="${c.status!=="SCANNED_OK"?"border-color:var(--amber);background:#fffdf6":""}">
+        <div class="info">
+          <div class="med">${esc(c.med_name)} <span class="muted" style="font-size:15px">${esc(c.spec)} × ${c.expected_qty}</span></div>
+          <div class="meta">床位 <strong>${esc(c.bed_no)}</strong> · ${esc(c.resident_name)}
+            · ${c.med_date} · ${c.resident_status==="OUT"
+              ? '<span class="pill-red">住户外出中</span>' : tag(c.status)}</div>
+          ${c.status==="REFUSED"||c.status==="DEFERRED"
+            ? `<div class="alert small">当前状态：${c.status==="REFUSED"?"拒服":"暂缓"}，须追踪复核闭环后才可补服签收</div>` : ""}
+        </div>
+        <button class="big" onclick="execute(${c.id},'TAKEN')" ${c.resident_status==="OUT"?"disabled":""}>✓ 已服药</button>
+        <button class="big" style="background:#fff;color:var(--red);border-color:var(--red)"
+          onclick="execute(${c.id},'REFUSED')">拒服</button>
+        <button class="big" style="background:#fff;color:var(--amber);border-color:var(--amber)"
+          onclick="execute(${c.id},'DEFERRED')">暂缓</button>
+      </div>`).join("") + "</div>";
+  }).join("") || `<div class="card muted">当前没有待执行项（未签发或已全部完成）。</div>`;
+}
+async function execute(cellId, outcome) {
+  const staff_id = +document.getElementById("nurse").value;
+  const witnessRaw = document.getElementById("witness").value;
+  const witness_id = witnessRaw ? +witnessRaw : null;
+  let reason = "";
+  if (outcome !== "TAKEN") {
+    reason = prompt(outcome === "REFUSED" ? "请记录拒服原因（必填，进入异常追踪）："
+                                          : "请记录暂缓原因（必填，进入异常追踪）：");
+    if (!reason) return;
+  }
+  await call("execute", { cell_id: cellId, outcome, staff_id, reason, witness_id }, render);
+}
+render();
+setInterval(render, 8000);
+</script>
+</body>
+</html>

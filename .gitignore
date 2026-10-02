@@ -13,3 +13,8 @@ build/
 轨迹/
 录屏/
 视频/
+
+# 运行时数据
+data/*.db
+data/*.db-*
+data/photos/*.png

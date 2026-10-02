@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分药盒管理 · 总览</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>🏥 分药盒管理系统</h1>
+  <nav>
+    <a href="/" class="active">总览</a>
+    <a href="/static/pharmacy.html">配药 / 双签端</a>
+    <a href="/static/bedside.html">床旁执行端</a>
+  </nav>
+  <div class="spacer"></div>
+  <div>签发链：<span id="chainState">校验中…</span></div>
+  <div>未闭环异常：<strong id="excCount" class="pill-red">-</strong></div>
+</header>
+<main>
+  <div class="card">
+    <h2>住户与床位</h2>
+    <table><thead><tr><th>床位</th><th>住户</th><th>房间</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody id="residents"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>医嘱版本（仅医师可修改；护理员无权改医嘱）</h2>
+    <div id="orders"></div>
+    <h2 style="margin-top:18px">交付新版医嘱（模拟）</h2>
+    <div class="toolbar">
+      <select id="newRes"></select>
+      <select id="newDoc"></select>
+      <input id="newItems" style="flex:1;min-width:340px"
+        value='[{"med_name":"测试药","spec":"5mg","dose_qty":1,"meals":["早餐"]}]'>
+      <input id="newNote" placeholder="医嘱说明" style="width:180px">
+      <button onclick="newOrder()">交付新版本</button>
+    </div>
+    <div class="small muted">交付新版后旧版本变「已被新版替代」，其药盒自动作废；同住户同日可按新版重建药盒。</div>
+  </div>
+
+  <div class="card">
+    <h2>药盒（按餐次 × 床位固定格位）</h2>
+    <div id="boxes" class="grid"></div>
+  </div>
+
+  <div class="card">
+    <h2>异常追踪（拒服 / 暂缓 / 碎裂 / 错放 / 停用 / 漏签 均须闭环）</h2>
+    <div id="exceptions"></div>
+  </div>
+
+  <div class="card">
+    <h2>进程内提醒</h2>
+    <div class="toolbar">
+      <button class="ghost" onclick="tick()">立即执行一次提醒扫描</button>
+    </div>
+    <table><thead><tr><th>时间</th><th>类型</th><th>内容</th></tr></thead>
+      <tbody id="reminders"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>签发链（SQLite 哈希链）</h2>
+    <div id="chain"></div>
+  </div>
+</main>
+<script src="/static/app.js"></script>
+<script>
+let STATE;
+async function refresh() {
+  STATE = await api("state");
+  window.__STATE = STATE;
+  document.getElementById("excCount").textContent = STATE.open_exception_count;
+
+  document.getElementById("residents").innerHTML = STATE.residents.map(r => `
+    <tr><td><strong>${esc(r.bed_no)}</strong></td><td>${esc(r.name)}</td>
+    <td>${esc(r.room)}</td><td>${tag(r.status)}</td>
+    <td>${r.status === "IN"
+      ? `<button class="ghost" onclick="setOut(${r.id},true)">登记外出</button>`
+      : `<button class="ghost" onclick="setOut(${r.id},false)">登记回院</button>`}</td></tr>`).join("");
+
+  const docs = STATE.staff.filter(s => s.role === "DOCTOR");
+  document.getElementById("newDoc").innerHTML =
+    docs.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join("");
+  document.getElementById("newRes").innerHTML =
+    STATE.residents.map(r => `<option value="${r.id}">${esc(r.bed_no)} ${esc(r.name)}</option>`).join("");
+
+  document.getElementById("orders").innerHTML = STATE.residents.map(r => {
+    const os = STATE.orders.filter(o => o.resident_id === r.id);
+    return `<div class="slot-block"><div class="slot-head"><span>${esc(r.bed_no)} · ${esc(r.name)}</span></div>
+      <div class="slot-body"><table><thead><tr><th>版本</th><th>状态</th><th>条目</th><th>医师</th><th>说明</th><th>临时停用</th></tr></thead><tbody>
+      ${os.map(o => `<tr><td>v${o.version}</td><td>${tag(o.status)}</td>
+        <td>${o.items.map(i => `<div>${esc(i.med_name)} ${esc(i.spec)} ×${i.dose_qty}
+          [${JSON.parse(i.meals).join("/")}] ${i.status==="STOPPED"?tag("STOPPED"):""}</div>`).join("")}</td>
+        <td>${esc(o.doctor_name)}</td><td>${esc(o.note||"")}</td>
+        <td>${o.items.filter(i=>i.status==="ACTIVE").map(i =>
+          `<button class="ghost small" onclick="suspend(${i.id})">停用 ${esc(i.med_name)}</button>`).join(" ")}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }).join("");
+
+  document.getElementById("boxes").innerHTML = STATE.boxes.map(b => `
+    <div class="slot-block">
+      <div class="slot-head"><span>${esc(b.code)}</span>${tag(b.status)}</div>
+      <div class="slot-body">
+        <div class="small muted">${esc(b.resident_name)} · 医嘱 v${b.version_snapshot} · ${b.med_date}</div>
+        <div class="small">配药：${esc(b.preparer_name)||"—"} ｜ 复核签发：${esc(b.checker_name)||"—"}</div>
+        ${b.photo_path ? `<div class="small">封盒照片：<a href="/photos/${esc(b.photo_path.split("/").pop())}" target="_blank">查看</a></div>` : ""}
+        ${b.status==="VOID" ? `<div class="alert small">${esc(b.void_reason||"")}</div>` :
+        STATE.slots.map(slot => {
+          const cs = b.cells.filter(c => c.slot === slot);
+          if (!cs.length) return "";
+          return `<div class="slot-block"><div class="slot-head"><span>${slot}</span><span>床位 ${esc(b.bed_no)}</span></div>
+            <div class="slot-body">${cs.map(c => `<div class="medline">
+              <span class="med">${esc(c.med_name)}</span>
+              <span class="dose">${esc(c.spec)} × ${c.expected_qty}</span>${tag(c.status)}
+              ${c.scan_flag && c.scan_flag!=="OK" ? `<span class="pill-red small">扫码：${esc(c.scan_flag)}</span>`:""}
+            </div>`).join("")}</div></div>`;
+        }).join("")}
+      </div></div>`).join("");
+
+  const ex = await api("exceptions");
+  document.getElementById("exceptions").innerHTML = `
+    <table><thead><tr><th>#</th><th>类型</th><th>住户/床位</th><th>原因</th><th>状态</th><th>闭环</th></tr></thead><tbody>
+    ${ex.all.map(e => `<tr><td>${e.id}</td><td>${esc(e.type)}</td>
+      <td>${esc(e.resident_name||"")} ${esc(e.bed_no||"")}</td>
+      <td>${esc(e.reason)}</td><td>${e.status==="OPEN"?tag("BLOCKED"):tag("SCANNED_OK")}
+        ${e.resolution?`<div class="small muted">${esc(e.resolution)}</div>`:""}</td>
+      <td>${e.status==="OPEN"?`<button class="ghost small" onclick="resolveExc(${e.id})">复核闭环</button>`:"—"}</td></tr>`).join("")}
+    </tbody></table>`;
+
+  const rem = await api("reminders");
+  document.getElementById("reminders").innerHTML = rem.map(r =>
+    `<tr><td class="small">${r.at.replace("T"," ").slice(0,19)}</td>
+     <td>${r.kind==="MISSED"?'<span class="pill-red">漏签</span>':'<span class="tag ok">临期</span>'}</td>
+     <td>${esc(r.message)}</td></tr>`).join("") ||
+    `<tr><td colspan="3" class="muted">暂无提醒</td></tr>`;
+
+  const ch = await api("chain");
+  document.getElementById("chainState").innerHTML = ch.tampered.length
+    ? `<span class="chain-bad">异常（行 ${ch.tampered.join(",")}）</span>`
+    : `<span class="chain-ok">完整 ✓</span>`;
+  document.getElementById("chain").innerHTML = `
+    <div class="small muted">最近 ${ch.events.length} 条（新→旧）</div>
+    <table><thead><tr><th>#</th><th>时间</th><th>事件</th><th>对象</th><th>内容</th></tr></thead><tbody>
+    ${ch.events.map(e => `<tr><td>${e.seq}</td>
+      <td class="small">${e.at.replace("T"," ").slice(0,19)}</td>
+      <td><strong>${esc(e.event_type)}</strong></td><td>${esc(e.ref)}</td>
+      <td class="small">${esc(e.payload)}</td></tr>`).join("")}</tbody></table>`;
+}
+async function setOut(id, out) {
+  await call("resident-out", { resident_id: id, out }, refresh);
+}
+async function suspend(itemId) {
+  const doc = document.getElementById("newDoc").value;
+  await call("suspend", { item_id: itemId, staff_id: doc }, refresh);
+}
+async function resolveExc(id) {
+  const r = prompt("请输入复核处理结果（闭环必填）：");
+  if (r === null) return;
+  const doc = document.getElementById("newDoc").value; // 任意员工均可闭环，借医师选择器
+  await call("resolve-exception", { exc_id: id, staff_id: doc, resolution: r }, refresh);
+}
+async function newOrder() {
+  let items;
+  try { items = JSON.parse(document.getElementById("newItems").value); }
+  catch { return toast("条目 JSON 不合法", true); }
+  await call("new-order", {
+    resident_id: +document.getElementById("newRes").value,
+    staff_id: +document.getElementById("newDoc").value,
+    items, note: document.getElementById("newNote").value
+  }, refresh);
+  document.getElementById("newNote").value = "";
+}
+async function tick() { await call("reminder-tick", {}, refresh); }
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

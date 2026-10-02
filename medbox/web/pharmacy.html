@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配药 · 装盒核对 · 双人复核</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>💊 配药 / 双签端</h1>
+  <nav>
+    <a href="/">总览</a>
+    <a href="/static/pharmacy.html" class="active">配药 / 双签端</a>
+    <a href="/static/bedside.html">床旁执行端</a>
+  </nav>
+</header>
+<main>
+  <div class="card">
+    <h2>操作身份</h2>
+    <div class="toolbar">
+      配药药师 <span id="selPreparer"></span>
+      复核药师 <span id="selChecker"></span>
+      <span class="notice" style="margin:0">配药人与复核人必须不同；护理员无权改医嘱。</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>装盒核对（扫码读数由模拟适配器返回；可注入异常）</h2>
+    <div id="boxes"></div>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+async function render() {
+  const s = await api("state");
+  window.__STATE = s;
+  const ph = s.staff.filter(x => x.role === "PHARMACIST");
+  if (!document.getElementById("selPreparer").querySelector("select")) {
+    document.getElementById("selPreparer").innerHTML =
+      `<select id="preparer">${ph.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>`;
+    document.getElementById("selChecker").innerHTML =
+      `<select id="checker">${ph.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>`;
+    if (ph.length > 1) document.getElementById("checker").value = ph[1].id;
+  }
+  const prep = +document.getElementById("preparer").value;
+  const chk = +document.getElementById("checker").value;
+
+  const active = s.boxes.filter(b => b.status !== "VOID");
+  document.getElementById("boxes").innerHTML = active.map(b => `
+    <div class="slot-block">
+      <div class="slot-head">
+        <span>${esc(b.code)} · ${esc(b.resident_name)} · 医嘱 v${b.version_snapshot} · ${b.med_date}</span>
+        ${tag(b.status)}
+      </div>
+      <div class="slot-body">
+        ${b.status==="ISSUED" ? `<div class="notice">已双签签发：配药 ${esc(b.preparer_name)} / 复核 ${esc(b.checker_name)}
+          ${b.photo_path?` · <a href="/photos/${esc(b.photo_path.split("/").pop())}" target="_blank">封盒照片</a>`:""}
+          · <button class="ghost small" onclick="handover(${b.id})">按床位交接给护理员</button></div>` : ""}
+        ${s.slots.map(slot => {
+          const cs = b.cells.filter(c => c.slot === slot);
+          if (!cs.length) return "";
+          return `<div class="slot-block">
+            <div class="slot-head"><span>${slot}</span><span>固定床位 ${esc(b.bed_no)}</span></div>
+            <div class="slot-body">
+            ${cs.map(c => `<div class="medline" style="${c.status==="BLOCKED"?"background:var(--red-soft);border-radius:8px;padding:8px":""}">
+              <span class="med">${esc(c.med_name)}</span>
+              <span class="dose">${esc(c.spec)}｜应摆 ${c.expected_qty}｜实读 ${c.actual_qty??"—"}</span>
+              ${tag(c.status)}
+              <div class="row-actions">
+                ${["PENDING","BLOCKED"].includes(c.status)
+                  ? `<button class="ghost" onclick="scan(${c.id})">扫码核对</button>` : ""}
+                ${c.status==="SCANNED_OK" ? `<button class="ghost small" onclick="scan(${c.id})">重新扫码</button>` : ""}
+                ${c.status==="BLOCKED"
+                  ? `<button class="ghost small" onclick="inject(${c.id},'crushed')">注入:碎裂</button>
+                     <button class="ghost small" onclick="inject(${c.id},'wrong_cell')">注入:错放</button>
+                     <button class="ghost small" onclick="inject(${c.id},'qty')">注入:数量</button>
+                     <button class="ghost small" onclick="resolveCell(${c.id})">闭环异常</button>
+                     <button class="ghost small" onclick="repack(${c.id})">复核后重摆</button>
+                     <button class="danger small" onclick="removeCell(${c.id})">撤药</button>` : ""}
+              </div>
+            </div>
+            ${c.status==="BLOCKED" ? `<div class="alert small">该格已阻断，未闭环不得封盒、不得签发</div>`:""}
+            `).join("")}
+            </div></div>`;
+        }).join("")}
+        ${b.status==="DRAFT" ? `
+          <div class="toolbar" style="margin-top:8px">
+            <button onclick="pack(${b.id})">封盒并拍照（配药人 ${esc(ph.find(x=>x.id===prep)?.name||"")}）</button>
+          </div>` : ""}
+        ${b.status==="PACKED" ? `
+          <div class="toolbar" style="margin-top:8px">
+            <button onclick="issue(${b.id})">药师核对药名/规格/数量/禁忌后签发（复核 ${esc(ph.find(x=>x.id===chk)?.name||"")}）</button>
+            <span class="small muted">同一人配药+复核将被系统拒绝</span>
+          </div>` : ""}
+      </div>
+    </div>`).join("") || `<div class="muted">暂无可操作药盒</div>`;
+}
+async function scan(cellId) { await call("scan", { cell_id: cellId }, render); }
+async function inject(cellId, kind) {
+  const slot = window.prompt("错放格位：请输入码中读出的餐次（其他类型直接确定）", "晚餐");
+  if (slot === null) return;
+  await call("inject-fault", { cell_id: cellId, kind, slot }, null);
+  await call("scan", { cell_id: cellId }, render);
+}
+async function resolveCell(cellId) {
+  const r = prompt("异常复核处理结果（闭环必填）：");
+  if (r === null) return;
+  const prep = document.getElementById("preparer").value;
+  await call("resolve-exception",
+    { exc_id: (await excIdFor(cellId)), staff_id: +prep, resolution: r }, render);
+}
+async function excIdFor(cellId) {
+  const ex = await api("exceptions");
+  const e = ex.open.find(x => x.ref_type === "CELL" && x.ref_id === cellId);
+  if (!e) throw new Error("该格没有 OPEN 异常单");
+  return e.id;
+}
+async function repack(cellId) {
+  await call("repack", { cell_id: cellId, staff_id: +document.getElementById("preparer").value }, render);
+}
+async function removeCell(cellId) {
+  await call("remove-cell", { cell_id: cellId, staff_id: +document.getElementById("checker").value }, render);
+}
+async function pack(boxId) {
+  await call("pack", { box_id: boxId, staff_id: +document.getElementById("preparer").value }, render);
+}
+async function issue(boxId) {
+  await call("issue", { box_id: boxId, staff_id: +document.getElementById("checker").value }, render);
+}
+async function handover(boxId) {
+  const nurses = window.__STATE.staff.filter(x => x.role === "NURSE");
+  const list = nurses.map(n => `${n.id}=${n.name}`).join("，");
+  const v = prompt(`交接给护理员（输入工号 id：${list}）`, nurses[0].id);
+  if (!v) return;
+  await call("handover", { box_id: boxId, to_id: +v, from_id: +document.getElementById("checker").value }, render);
+}
+render();
+setInterval(render, 12000);
+</script>
+</body>
+</html>
